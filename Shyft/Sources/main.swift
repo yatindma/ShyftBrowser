@@ -145,6 +145,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         globalApp = self
 
         let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.tapDisabledByTimeout.rawValue)
+            | (1 << CGEventType.tapDisabledByUserInput.rawValue)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -152,6 +154,14 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             options: .listenOnly,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                // Re-enable tap if macOS disabled it
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let t = globalApp?.eventTap {
+                        CGEvent.tapEnable(tap: t, enable: true)
+                    }
+                    return Unmanaged.passRetained(event)
+                }
+
                 if type == .keyDown {
                     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                     // 's' key = keycode 1
@@ -185,6 +195,13 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+
+        // Periodically re-enable tap in case macOS silently killed it
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            if let t = self?.eventTap {
+                CGEvent.tapEnable(tap: t, enable: true)
+            }
+        }
     }
 
     func recordSPress() {
