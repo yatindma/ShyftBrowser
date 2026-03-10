@@ -114,10 +114,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
 
         // Ctrl+S → instant toggle (keyCode 1 = 's')
-        if e.keyCode == 1,
-           e.modifierFlags.contains(.control),
-           !e.modifierFlags.contains(.command),
-           !e.modifierFlags.contains(.option) {
+        let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if e.keyCode == 1, mods.contains(.control), !mods.contains(.command), !mods.contains(.option) {
             DispatchQueue.main.async { [weak self] in self?.toggle() }
             return
         }
@@ -220,6 +218,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         window?.alphaValue = opacity
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
 
     func makeWindow() {
