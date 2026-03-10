@@ -68,8 +68,12 @@ Everything runs locally on your Mac. Nothing leaves your machine. Ever.
 ### Option 1: Download (easiest)
 1. Go to [**Releases**](../../releases)
 2. Download `ShyftBrowser.dmg`
-3. Open it → Drag to Applications → Done
-4. First time it opens, click **Allow** when it asks for Accessibility permission
+3. Open the DMG
+4. **Important:** Right-click `Shyft.app` → click **Open** → click **Open** again on the warning dialog
+   > macOS blocks unsigned apps by default. This only happens once — after that it opens normally.
+   >
+   > If you still see "damaged", open Terminal and run: `xattr -cr /Applications/Shyft.app`
+5. First time it opens, click **Allow** when it asks for Accessibility permission
 
 ### Option 2: Build it yourself
 ```bash
