@@ -36,9 +36,22 @@ That's it. Simple.
 
 ---
 
+## Privacy
+
+No history. No tracking. No analytics. No server. No database. No connection to anything.
+
+Just you and your browser. **100% private.**
+
+> Honestly, I don't even have money to host a database to collect your data even if I wanted to :D
+
+Everything runs locally on your Mac. Nothing leaves your machine. Ever.
+
+---
+
 ## Features
 
 - **100% invisible** on screen sharing, screen recording, and screenshots
+- **100% private** — no history, no tracking, no data collection, no servers
 - **Translucent** — see your desktop behind it, adjust opacity from 10% to 100%
 - **Tabs** — open multiple tabs just like a normal browser
 - **Login works** — sign into any website, cookies are saved
