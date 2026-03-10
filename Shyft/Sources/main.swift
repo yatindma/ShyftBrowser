@@ -41,8 +41,6 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: 30)
         statusItem.button?.title = "•"
         let m = NSMenu()
-        m.addItem(NSMenuItem(title: "Toggle (sss)", action: #selector(toggle), keyEquivalent: ""))
-        m.addItem(.separator())
         let opacityLabel = NSMenuItem(title: "Opacity", action: nil, keyEquivalent: "")
         opacityLabel.isEnabled = false
         m.addItem(opacityLabel)
@@ -99,10 +97,11 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
 
         print("✅ StealthBrowser running!")
-        print("   sss = toggle | Cmd+T = new tab | Cmd+W = close tab")
+        print("   Ctrl+S = toggle (instant) | sss = toggle (triple-press)")
+        print("   Cmd+T = new tab | Cmd+W = close tab")
         print("   Cmd+L = URL bar | Cmd+Shift+[/] = switch tabs")
         print("")
-        print("⚠️  If sss doesn't work when other apps are focused:")
+        print("⚠️  If hotkeys don't work when other apps are focused:")
         print("   System Settings → Privacy & Security → Accessibility")
         print("   Add StealthBrowser.app (or Terminal if running from terminal)")
     }
@@ -114,7 +113,16 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             return
         }
 
-        // Only bare 's' key (no Cmd/Ctrl/Option)
+        // Ctrl+S → instant toggle (keyCode 1 = 's')
+        if e.keyCode == 1,
+           e.modifierFlags.contains(.control),
+           !e.modifierFlags.contains(.command),
+           !e.modifierFlags.contains(.option) {
+            DispatchQueue.main.async { [weak self] in self?.toggle() }
+            return
+        }
+
+        // Only bare 's' key (no Cmd/Ctrl/Option) for triple-press
         guard e.keyCode == 1,
               e.modifierFlags.intersection(.deviceIndependentFlagsMask)
                   .subtracting([.capsLock, .numericPad, .function]).isEmpty
@@ -149,6 +157,13 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
                     // 's' key = keycode 1
                     if keyCode == 1 {
                         let flags = event.flags
+                        // Ctrl+S → instant toggle
+                        if flags.contains(.maskControl) && !flags.contains(.maskCommand) && !flags.contains(.maskAlternate) {
+                            DispatchQueue.main.async {
+                                globalApp?.toggle()
+                            }
+                        }
+                        // Bare 's' (no modifiers) → triple-press detection
                         let hasModifiers = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
                         if !hasModifiers {
                             DispatchQueue.main.async {

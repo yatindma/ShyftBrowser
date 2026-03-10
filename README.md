@@ -28,8 +28,9 @@
 
 A browser that **only you can see**. Anyone watching your screen share sees nothing — no window, no black box, nothing.
 
-- Press `s` three times → browser pops up
-- Press `s` three times again → it disappears
+- Press `Ctrl+S` → browser pops up instantly
+- Press `Ctrl+S` again → it disappears
+- Or press `s` three times quickly as an alternative
 - Nobody on Zoom, Meet, Teams, or any screen recording will ever see it
 
 That's it. Simple.
@@ -83,7 +84,8 @@ open ../Shyft.app
 ## How to Use
 
 **Open/Close the browser:**
-> Press `s` three times quickly. That's it. Works from anywhere — even if another app is focused.
+> Press `Ctrl+S` — instant toggle. Works from anywhere, even if another app is focused.
+> Or press `s` three times quickly as an alternative.
 
 **Hide it fast:**
 > Press `Esc`
@@ -92,7 +94,8 @@ open ../Shyft.app
 
 | Keys | What it does |
 |---|---|
-| `s` `s` `s` | Show / hide browser |
+| `Ctrl + S` | Show / hide browser (instant) |
+| `s` `s` `s` | Show / hide browser (alternative) |
 | `Esc` | Hide browser |
 | `Cmd + L` | Jump to URL bar |
 | `Cmd + T` | Open new tab |
@@ -104,7 +107,7 @@ open ../Shyft.app
 > Click the `•` dot in your menu bar → pick opacity from 10% to 100%
 
 ### First time setup
-When you open ShyftBrowser for the first time, macOS will ask for **Accessibility permission**. This is needed so the `sss` hotkey works even when other apps are focused.
+When you open ShyftBrowser for the first time, macOS will ask for **Accessibility permission**. This is needed so `Ctrl+S` and `sss` hotkeys work even when other apps are focused.
 
 **System Settings → Privacy & Security → Accessibility → Turn on ShyftBrowser**
 
