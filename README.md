@@ -107,7 +107,7 @@ open ../Shyft.app
 > Click the `•` dot in your menu bar → pick opacity from 10% to 100%
 
 ### First time setup
-When you open ShyftBrowser for the first time, macOS will ask for **Accessibility permission**. This is needed so `Ctrl+S` and `sss` hotkeys work even when other apps are focused.
+When you open ShyftBrowser for the first time, macOS will ask for **Accessibility permission**. This is needed so the `sss` hotkey works even when other apps are focused. (`Ctrl+S` works without it.)
 
 **System Settings → Privacy & Security → Accessibility → Turn on ShyftBrowser**
 

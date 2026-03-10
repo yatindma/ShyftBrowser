@@ -1,8 +1,8 @@
 import Cocoa
 import WebKit
-import CoreGraphics
+import Carbon
 
-// Global reference for CGEvent callback
+// Global reference for hotkey callback
 var globalApp: App?
 
 struct Tab {
@@ -15,9 +15,9 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     var window: NSWindow?
     var urlBar: NSTextField?
     var sTimes: [Date] = []
-    var globalMon: Any?
     var localMon: Any?
-    var eventTap: CFMachPort?
+    var globalMon: Any?
+    var hotKeyRef: EventHotKeyRef?
     var opacity: CGFloat = 0.55
 
     var tabs: [Tab] = []
@@ -28,14 +28,6 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     var activeWebView: WKWebView? { tabs.isEmpty ? nil : tabs[activeTabIndex].webView }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        // Prompt for Accessibility permission (needed for global key listening)
-        let trusted = AXIsProcessTrustedWithOptions(
-            [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        )
-        if !trusted {
-            print("⚠️  Please grant Accessibility permission and restart the app!")
-        }
-
         NSApp.setActivationPolicy(.regular)
 
         statusItem = NSStatusBar.system.statusItem(withLength: 30)
@@ -81,14 +73,14 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         NSApp.mainMenu = mainMenu
 
-        // Local monitor for when app is focused
+        // Local monitor for Esc and triple-press 's' when app is focused
         localMon = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in self?.onKey(e, local: true); return e }
 
-        // Global hotkey via CGEvent tap — works even without Accessibility in some cases
-        setupGlobalHotkey()
-
-        // Also try NSEvent global monitor as backup
+        // Global monitor for triple-press 's' when other apps are focused
         globalMon = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in self?.onKey(e, local: false) }
+
+        // Carbon global hotkey: Ctrl+S — works from ANY app, no accessibility needed
+        registerCtrlSHotkey()
 
         toggle()
 
@@ -100,23 +92,60 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         print("   Ctrl+S = toggle (instant) | sss = toggle (triple-press)")
         print("   Cmd+T = new tab | Cmd+W = close tab")
         print("   Cmd+L = URL bar | Cmd+Shift+[/] = switch tabs")
-        print("")
-        print("⚠️  If hotkeys don't work when other apps are focused:")
-        print("   System Settings → Privacy & Security → Accessibility")
-        print("   Add ShyftBrowser.app (or Terminal if running from terminal)")
     }
+
+    // MARK: - Carbon Global Hotkey (Ctrl+S)
+
+    func registerCtrlSHotkey() {
+        globalApp = self
+
+        var hotKeyID = EventHotKeyID()
+        hotKeyID.signature = OSType(0x53485946) // "SHYF"
+        hotKeyID.id = 1
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+
+        // Install the handler on the app event target
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { (_: EventHandlerCallRef?, event: EventRef?, _: UnsafeMutableRawPointer?) -> OSStatus in
+                DispatchQueue.main.async {
+                    globalApp?.toggle()
+                }
+                return noErr
+            },
+            1,
+            &eventType,
+            nil,
+            nil
+        )
+
+        // Register Ctrl+S: keycode 1 = 's', controlKey = Carbon control modifier
+        let status = RegisterEventHotKey(
+            UInt32(kVK_ANSI_S),
+            UInt32(controlKey),
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        if status != noErr {
+            print("⚠️  Failed to register Ctrl+S hotkey (status: \(status))")
+        } else {
+            print("✅ Ctrl+S global hotkey registered")
+        }
+    }
+
+    // MARK: - Local/Global Key Monitor (Esc + triple-press 's')
 
     func onKey(_ e: NSEvent, local: Bool) {
         // Esc hides only if window is showing
         if e.keyCode == 53 {
             if let w = window, w.isVisible { w.orderOut(nil) }
-            return
-        }
-
-        // Ctrl+S → instant toggle (keyCode 1 = 's')
-        let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if e.keyCode == 1, mods.contains(.control), !mods.contains(.command), !mods.contains(.option) {
-            DispatchQueue.main.async { [weak self] in self?.toggle() }
             return
         }
 
@@ -139,78 +168,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
     }
 
-    func setupGlobalHotkey() {
-        globalApp = self
-
-        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-            | (1 << CGEventType.tapDisabledByTimeout.rawValue)
-            | (1 << CGEventType.tapDisabledByUserInput.rawValue)
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: eventMask,
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                // Re-enable tap if macOS disabled it
-                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    if let t = globalApp?.eventTap {
-                        CGEvent.tapEnable(tap: t, enable: true)
-                    }
-                    return Unmanaged.passRetained(event)
-                }
-
-                if type == .keyDown {
-                    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-                    // 's' key = keycode 1
-                    if keyCode == 1 {
-                        let flags = event.flags
-                        // Ctrl+S → instant toggle
-                        if flags.contains(.maskControl) && !flags.contains(.maskCommand) && !flags.contains(.maskAlternate) {
-                            DispatchQueue.main.async {
-                                globalApp?.toggle()
-                            }
-                        }
-                        // Bare 's' (no modifiers) → triple-press detection
-                        let hasModifiers = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
-                        if !hasModifiers {
-                            DispatchQueue.main.async {
-                                globalApp?.recordSPress()
-                            }
-                        }
-                    }
-                }
-                return Unmanaged.passRetained(event)
-            },
-            userInfo: nil
-        ) else {
-            print("⚠️  Could not create event tap. Grant Accessibility permission!")
-            print("   System Settings → Privacy & Security → Accessibility")
-            return
-        }
-
-        eventTap = tap
-        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-
-        // Periodically re-enable tap in case macOS silently killed it
-        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            if let t = self?.eventTap {
-                CGEvent.tapEnable(tap: t, enable: true)
-            }
-        }
-    }
-
-    func recordSPress() {
-        let now = Date()
-        sTimes.append(now)
-        sTimes = sTimes.filter { now.timeIntervalSince($0) < 0.7 }
-        if sTimes.count >= 3 {
-            sTimes.removeAll()
-            toggle()
-        }
-    }
+    // MARK: - Toggle
 
     @objc func toggle() {
         if let w = window, w.isVisible { w.orderOut(nil); return }
@@ -220,6 +178,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
+
+    // MARK: - Window
 
     func makeWindow() {
         let sf = NSScreen.main!.visibleFrame
