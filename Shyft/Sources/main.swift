@@ -96,14 +96,14 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             NSApp.setActivationPolicy(.accessory)
         }
 
-        print("✅ StealthBrowser running!")
+        print("✅ ShyftBrowser running!")
         print("   Ctrl+S = toggle (instant) | sss = toggle (triple-press)")
         print("   Cmd+T = new tab | Cmd+W = close tab")
         print("   Cmd+L = URL bar | Cmd+Shift+[/] = switch tabs")
         print("")
         print("⚠️  If hotkeys don't work when other apps are focused:")
         print("   System Settings → Privacy & Security → Accessibility")
-        print("   Add StealthBrowser.app (or Terminal if running from terminal)")
+        print("   Add ShyftBrowser.app (or Terminal if running from terminal)")
     }
 
     func onKey(_ e: NSEvent, local: Bool) {
