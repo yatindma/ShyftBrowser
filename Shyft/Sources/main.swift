@@ -10,7 +10,44 @@ struct Tab {
     var title: String = "New Tab"
 }
 
-class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+// MARK: - Hotkey Definitions
+
+struct HotkeyConfig: Equatable {
+    let label: String
+    let keyCode: UInt32
+    let carbonModifiers: UInt32
+    let displayString: String
+}
+
+let presetHotkeys: [HotkeyConfig] = [
+    HotkeyConfig(label: "Ctrl + S", keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(controlKey), displayString: "⌃S"),
+    HotkeyConfig(label: "Ctrl + Shift + S", keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(controlKey | shiftKey), displayString: "⌃⇧S"),
+    HotkeyConfig(label: "Ctrl + Shift + H", keyCode: UInt32(kVK_ANSI_H), carbonModifiers: UInt32(controlKey | shiftKey), displayString: "⌃⇧H"),
+    HotkeyConfig(label: "Option + Space", keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(optionKey), displayString: "⌥Space"),
+    HotkeyConfig(label: "Cmd + Shift + B", keyCode: UInt32(kVK_ANSI_B), carbonModifiers: UInt32(cmdKey | shiftKey), displayString: "⌘⇧B"),
+    HotkeyConfig(label: "Ctrl + `", keyCode: UInt32(kVK_ANSI_Grave), carbonModifiers: UInt32(controlKey), displayString: "⌃`"),
+]
+
+
+enum PageOption: String, CaseIterable {
+    case claude = "https://claude.ai"
+    case chatgpt = "https://chatgpt.com"
+    case google = "https://google.com"
+    case blank = "about:blank"
+    case custom = "custom"
+
+    var label: String {
+        switch self {
+        case .claude: return "Claude"
+        case .chatgpt: return "ChatGPT"
+        case .google: return "Google"
+        case .blank: return "Blank Page"
+        case .custom: return "Custom URL"
+        }
+    }
+}
+
+class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem!
     var window: NSWindow?
     var urlBar: NSTextField?
@@ -19,6 +56,21 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     var globalMon: Any?
     var hotKeyRef: EventHotKeyRef?
     var opacity: CGFloat = 0.55
+    var settingsWindow: NSWindow?
+
+    // Settings - persisted via UserDefaults
+    var homePage: PageOption { PageOption(rawValue: UserDefaults.standard.string(forKey: "homePage") ?? PageOption.claude.rawValue) ?? .claude }
+    var homePageCustomURL: String { UserDefaults.standard.string(forKey: "homePageCustomURL") ?? "" }
+    var newTabPage: PageOption { PageOption(rawValue: UserDefaults.standard.string(forKey: "newTabPage") ?? PageOption.blank.rawValue) ?? .blank }
+    var newTabPageCustomURL: String { UserDefaults.standard.string(forKey: "newTabPageCustomURL") ?? "" }
+
+    func resolvedHomePageURL() -> String {
+        homePage == .custom ? (homePageCustomURL.isEmpty ? "about:blank" : homePageCustomURL) : homePage.rawValue
+    }
+
+    func resolvedNewTabURL() -> String {
+        newTabPage == .custom ? (newTabPageCustomURL.isEmpty ? "about:blank" : newTabPageCustomURL) : newTabPage.rawValue
+    }
 
     var tabs: [Tab] = []
     var activeTabIndex: Int = 0
@@ -52,6 +104,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         sliderItem.view = sliderView
         m.addItem(sliderItem)
 
+        m.addItem(.separator())
+        m.addItem(NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ","))
         m.addItem(.separator())
         m.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = m
@@ -89,8 +143,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         // Global monitor for triple-press 's' when other apps are focused
         globalMon = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in self?.onKey(e, local: false) }
 
-        // Carbon global hotkey: Ctrl+S — works from ANY app, no accessibility needed
-        registerCtrlSHotkey()
+        // Carbon global hotkey — works from ANY app, no accessibility needed
+        registerHotkey()
 
         toggle()
 
@@ -104,50 +158,77 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         print("   Cmd+L = URL bar | Cmd+Shift+[/] = switch tabs")
     }
 
-    // MARK: - Carbon Global Hotkey (Ctrl+S)
+    // MARK: - Carbon Global Hotkey
 
-    func registerCtrlSHotkey() {
+    var eventHandlerInstalled = false
+
+    func savedHotkeyKeyCode() -> UInt32 {
+        let val = UserDefaults.standard.integer(forKey: "hotkeyKeyCode")
+        return val == 0 ? UInt32(kVK_ANSI_S) : UInt32(val)
+    }
+
+    func savedHotkeyModifiers() -> UInt32 {
+        let val = UserDefaults.standard.integer(forKey: "hotkeyModifiers")
+        return val == 0 ? UInt32(controlKey) : UInt32(val)
+    }
+
+    func savedHotkeyPresetIndex() -> Int {
+        UserDefaults.standard.integer(forKey: "hotkeyPresetIndex") // 0 = Ctrl+S (default)
+    }
+
+
+    func registerHotkey() {
         globalApp = self
+
+        // Install event handler only once
+        if !eventHandlerInstalled {
+            var eventType = EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            )
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_: EventHandlerCallRef?, _: EventRef?, _: UnsafeMutableRawPointer?) -> OSStatus in
+                    DispatchQueue.main.async { globalApp?.toggle() }
+                    return noErr
+                },
+                1,
+                &eventType,
+                nil,
+                nil
+            )
+            eventHandlerInstalled = true
+        }
+
+        // Unregister previous hotkey if any
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
 
         var hotKeyID = EventHotKeyID()
         hotKeyID.signature = OSType(0x53485946) // "SHYF"
         hotKeyID.id = 1
 
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        let kc = savedHotkeyKeyCode()
+        let mods = savedHotkeyModifiers()
 
-        // Install the handler on the app event target
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { (_: EventHandlerCallRef?, event: EventRef?, _: UnsafeMutableRawPointer?) -> OSStatus in
-                DispatchQueue.main.async {
-                    globalApp?.toggle()
-                }
-                return noErr
-            },
-            1,
-            &eventType,
-            nil,
-            nil
-        )
-
-        // Register Ctrl+S: keycode 1 = 's', controlKey = Carbon control modifier
         let status = RegisterEventHotKey(
-            UInt32(kVK_ANSI_S),
-            UInt32(controlKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
+            kc, mods, hotKeyID,
+            GetApplicationEventTarget(), 0, &hotKeyRef
         )
 
         if status != noErr {
-            print("⚠️  Failed to register Ctrl+S hotkey (status: \(status))")
+            print("⚠️  Failed to register hotkey (status: \(status))")
         } else {
-            print("✅ Ctrl+S global hotkey registered")
+            print("✅ Global hotkey registered (keyCode: \(kc), modifiers: \(mods))")
         }
+    }
+
+    func updateHotkey(keyCode: UInt32, modifiers: UInt32) {
+        UserDefaults.standard.set(Int(keyCode), forKey: "hotkeyKeyCode")
+        UserDefaults.standard.set(Int(modifiers), forKey: "hotkeyModifiers")
+        registerHotkey()
     }
 
     // MARK: - Local/Global Key Monitor (Esc + triple-press 's')
@@ -189,8 +270,8 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         if window == nil { makeWindow() }
         window?.alphaValue = opacity
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        NSApp.activate()
+        NSRunningApplication.current.activate()
     }
 
     // MARK: - Window
@@ -271,7 +352,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         w.contentView = box
         window = w
 
-        addNewTab(url: "https://claude.ai")
+        addNewTab(url: resolvedHomePageURL())
     }
 
     func createWebView() -> WKWebView {
@@ -346,10 +427,13 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     @objc func newTabAction() {
-        addNewTab(url: "about:blank")
-        showURLBar()
-        urlBar?.stringValue = ""
-        urlBar?.selectText(nil)
+        let newTabURL = resolvedNewTabURL()
+        addNewTab(url: newTabURL)
+        if newTabURL == "about:blank" {
+            showURLBar()
+            urlBar?.stringValue = ""
+            urlBar?.selectText(nil)
+        }
     }
 
     @objc func closeTabAction() {
@@ -389,6 +473,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     @objc func sliderChanged(_ sender: NSSlider) {
         opacity = CGFloat(sender.doubleValue) / 100.0
         window?.alphaValue = opacity
+        settingsWindow?.alphaValue = opacity
     }
 
     @objc func focusURLBar() {
@@ -426,6 +511,265 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         if let wv = activeWebView {
             wv.frame = webContainer?.bounds ?? .zero
         }
+    }
+
+    // MARK: - Settings Window
+
+    // Tag constants for settings UI
+    static let opacityValueTag = 999
+    static let homeCustomFieldTag = 1001
+    static let newTabCustomFieldTag = 1002
+    var hotkeyDisplayLabel: NSTextField?
+
+    @objc func openSettings() {
+        if let sw = settingsWindow {
+            sw.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let w: CGFloat = 400
+        let h: CGFloat = 500
+        let sf = NSScreen.main!.visibleFrame
+        let r = NSRect(x: sf.midX - w / 2, y: sf.midY - h / 2, width: w, height: h)
+
+        let sw = NSWindow(contentRect: r, styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        sw.sharingType = .none
+        sw.level = .floating
+        sw.titlebarAppearsTransparent = true
+        sw.titleVisibility = .hidden
+        sw.backgroundColor = .clear
+        sw.isOpaque = false
+        sw.hasShadow = false
+        sw.title = "Settings"
+        sw.alphaValue = opacity
+
+        let content = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: w, height: h))
+        content.material = .hudWindow
+        content.blendingMode = .behindWindow
+        content.state = .active
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 12
+        content.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+        content.layer?.borderWidth = 1.5
+
+        var y = h - 55
+
+        // Title
+        let title = NSTextField(labelWithString: "Settings")
+        title.frame = NSRect(x: 20, y: y, width: w - 40, height: 24)
+        title.font = .systemFont(ofSize: 18, weight: .semibold)
+        title.textColor = .white
+        content.addSubview(title)
+
+        // --- Opacity Section ---
+        y -= 45
+        let opacityLabel = NSTextField(labelWithString: "Window Opacity")
+        opacityLabel.frame = NSRect(x: 20, y: y, width: 140, height: 18)
+        opacityLabel.font = .systemFont(ofSize: 13)
+        opacityLabel.textColor = .secondaryLabelColor
+        content.addSubview(opacityLabel)
+
+        let opacityValue = NSTextField(labelWithString: "\(Int(opacity * 100))%")
+        opacityValue.frame = NSRect(x: w - 60, y: y, width: 40, height: 18)
+        opacityValue.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        opacityValue.textColor = .white
+        opacityValue.alignment = .right
+        opacityValue.tag = App.opacityValueTag
+        content.addSubview(opacityValue)
+
+        y -= 28
+        let slider = NSSlider(frame: NSRect(x: 20, y: y, width: w - 40, height: 20))
+        slider.minValue = 10
+        slider.maxValue = 100
+        slider.doubleValue = Double(opacity * 100)
+        slider.isContinuous = true
+        slider.target = self
+        slider.action = #selector(settingsSliderChanged(_:))
+        content.addSubview(slider)
+
+        // --- Toggle Shortcut Section ---
+        y -= 40
+        let hotkeyLabel = NSTextField(labelWithString: "Toggle Shortcut")
+        hotkeyLabel.frame = NSRect(x: 20, y: y, width: 150, height: 18)
+        hotkeyLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        hotkeyLabel.textColor = .white
+        content.addSubview(hotkeyLabel)
+
+        let hotkeyDisplay = NSTextField(labelWithString: "")
+        hotkeyDisplay.frame = NSRect(x: w - 80, y: y, width: 60, height: 18)
+        hotkeyDisplay.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        hotkeyDisplay.textColor = NSColor.white.withAlphaComponent(0.6)
+        hotkeyDisplay.alignment = .right
+        hotkeyDisplayLabel = hotkeyDisplay
+        content.addSubview(hotkeyDisplay)
+
+        y -= 5
+        let hotkeyPopup = NSPopUpButton(frame: NSRect(x: 20, y: y - 26, width: w - 40, height: 26), pullsDown: false)
+        for preset in presetHotkeys { hotkeyPopup.addItem(withTitle: preset.label) }
+        hotkeyPopup.selectItem(at: savedHotkeyPresetIndex())
+        hotkeyPopup.target = self
+        hotkeyPopup.action = #selector(hotkeyPresetChanged(_:))
+        content.addSubview(hotkeyPopup)
+        y -= 26
+
+        updateHotkeyDisplayLabel()
+
+        // --- Home Page Section ---
+        y -= 30
+        let homeLabel = NSTextField(labelWithString: "Home Page")
+        homeLabel.frame = NSRect(x: 20, y: y, width: w - 40, height: 18)
+        homeLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        homeLabel.textColor = .white
+        content.addSubview(homeLabel)
+
+        y -= 5
+        let homeOptions: [PageOption] = [.claude, .chatgpt, .google, .custom]
+        let homePopup = NSPopUpButton(frame: NSRect(x: 20, y: y - 26, width: w - 40, height: 26), pullsDown: false)
+        for opt in homeOptions { homePopup.addItem(withTitle: opt.label) }
+        // Select current
+        if let idx = homeOptions.firstIndex(of: homePage) { homePopup.selectItem(at: idx) }
+        homePopup.target = self
+        homePopup.action = #selector(homePageChanged(_:))
+        homePopup.tag = 2000
+        content.addSubview(homePopup)
+        y -= 26
+
+        y -= 6
+        let homeCustomField = NSTextField(frame: NSRect(x: 20, y: y - 26, width: w - 40, height: 26))
+        homeCustomField.placeholderString = "Enter custom URL..."
+        homeCustomField.stringValue = homePageCustomURL
+        homeCustomField.bezelStyle = .roundedBezel
+        homeCustomField.font = .systemFont(ofSize: 13)
+        homeCustomField.tag = App.homeCustomFieldTag
+        homeCustomField.target = self
+        homeCustomField.action = #selector(homeCustomURLChanged(_:))
+        homeCustomField.isHidden = homePage != .custom
+        content.addSubview(homeCustomField)
+        y -= (homePage == .custom ? 32 : 0)
+
+        // --- New Tab Page Section ---
+        y -= 30
+        let newTabLabel = NSTextField(labelWithString: "New Tab Page")
+        newTabLabel.frame = NSRect(x: 20, y: y, width: w - 40, height: 18)
+        newTabLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        newTabLabel.textColor = .white
+        content.addSubview(newTabLabel)
+
+        y -= 5
+        let newTabOptions: [PageOption] = [.blank, .claude, .chatgpt, .google, .custom]
+        let newTabPopup = NSPopUpButton(frame: NSRect(x: 20, y: y - 26, width: w - 40, height: 26), pullsDown: false)
+        for opt in newTabOptions { newTabPopup.addItem(withTitle: opt.label) }
+        if let idx = newTabOptions.firstIndex(of: newTabPage) { newTabPopup.selectItem(at: idx) }
+        newTabPopup.target = self
+        newTabPopup.action = #selector(newTabPageChanged(_:))
+        newTabPopup.tag = 3000
+        content.addSubview(newTabPopup)
+        y -= 26
+
+        y -= 6
+        let newTabCustomField = NSTextField(frame: NSRect(x: 20, y: y - 26, width: w - 40, height: 26))
+        newTabCustomField.placeholderString = "Enter custom URL..."
+        newTabCustomField.stringValue = newTabPageCustomURL
+        newTabCustomField.bezelStyle = .roundedBezel
+        newTabCustomField.font = .systemFont(ofSize: 13)
+        newTabCustomField.tag = App.newTabCustomFieldTag
+        newTabCustomField.target = self
+        newTabCustomField.action = #selector(newTabCustomURLChanged(_:))
+        newTabCustomField.isHidden = newTabPage != .custom
+        content.addSubview(newTabCustomField)
+
+        // Info label
+        let info = NSTextField(labelWithString: "⌃S or sss to toggle • Invisible in screen share")
+        info.frame = NSRect(x: 20, y: 15, width: w - 40, height: 16)
+        info.font = .systemFont(ofSize: 10)
+        info.textColor = NSColor.white.withAlphaComponent(0.4)
+        content.addSubview(info)
+
+        sw.contentView = content
+        sw.delegate = self
+        sw.isReleasedWhenClosed = false
+        settingsWindow = sw
+
+        sw.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let closingWindow = notification.object as? NSWindow, closingWindow === settingsWindow {
+            settingsWindow = nil
+            hotkeyDisplayLabel = nil
+        }
+    }
+
+    @objc func settingsSliderChanged(_ sender: NSSlider) {
+        opacity = CGFloat(sender.doubleValue) / 100.0
+        window?.alphaValue = opacity
+        settingsWindow?.alphaValue = opacity
+
+        if let content = settingsWindow?.contentView {
+            for subview in content.subviews where subview.tag == App.opacityValueTag {
+                if let label = subview as? NSTextField {
+                    label.stringValue = "\(Int(sender.doubleValue))%"
+                }
+            }
+        }
+    }
+
+    @objc func homePageChanged(_ sender: NSPopUpButton) {
+        let options: [PageOption] = [.claude, .chatgpt, .google, .custom]
+        let selected = options[sender.indexOfSelectedItem]
+        UserDefaults.standard.set(selected.rawValue, forKey: "homePage")
+
+        // Show/hide custom URL field
+        if let content = settingsWindow?.contentView {
+            for subview in content.subviews where subview.tag == App.homeCustomFieldTag {
+                subview.isHidden = selected != .custom
+            }
+        }
+    }
+
+    @objc func homeCustomURLChanged(_ sender: NSTextField) {
+        var url = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        if !url.isEmpty && !url.contains("://") { url = "https://\(url)" }
+        UserDefaults.standard.set(url, forKey: "homePageCustomURL")
+    }
+
+    @objc func newTabPageChanged(_ sender: NSPopUpButton) {
+        let options: [PageOption] = [.blank, .claude, .chatgpt, .google, .custom]
+        let selected = options[sender.indexOfSelectedItem]
+        UserDefaults.standard.set(selected.rawValue, forKey: "newTabPage")
+
+        if let content = settingsWindow?.contentView {
+            for subview in content.subviews where subview.tag == App.newTabCustomFieldTag {
+                subview.isHidden = selected != .custom
+            }
+        }
+    }
+
+    @objc func newTabCustomURLChanged(_ sender: NSTextField) {
+        var url = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        if !url.isEmpty && !url.contains("://") { url = "https://\(url)" }
+        UserDefaults.standard.set(url, forKey: "newTabPageCustomURL")
+    }
+
+    // MARK: - Hotkey Settings Actions
+
+    func updateHotkeyDisplayLabel() {
+        guard let label = hotkeyDisplayLabel else { return }
+        let idx = savedHotkeyPresetIndex()
+        if idx < presetHotkeys.count {
+            label.stringValue = presetHotkeys[idx].displayString
+        }
+    }
+
+    @objc func hotkeyPresetChanged(_ sender: NSPopUpButton) {
+        let idx = sender.indexOfSelectedItem
+        guard idx < presetHotkeys.count else { return }
+        let preset = presetHotkeys[idx]
+        UserDefaults.standard.set(idx, forKey: "hotkeyPresetIndex")
+        updateHotkey(keyCode: preset.keyCode, modifiers: preset.carbonModifiers)
+        updateHotkeyDisplayLabel()
     }
 
     @objc func go(_ sender: NSTextField) {
