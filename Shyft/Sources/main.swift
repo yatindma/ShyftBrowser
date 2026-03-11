@@ -23,7 +23,9 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     var tabs: [Tab] = []
     var activeTabIndex: Int = 0
     var tabBar: NSView?
+    var toolbar: NSVisualEffectView?
     var webContainer: NSView?
+    var urlBarVisible: Bool = false
 
     var activeWebView: WKWebView? { tabs.isEmpty ? nil : tabs[activeTabIndex].webView }
 
@@ -36,12 +38,20 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let opacityLabel = NSMenuItem(title: "Opacity", action: nil, keyEquivalent: "")
         opacityLabel.isEnabled = false
         m.addItem(opacityLabel)
-        for pct in stride(from: 10, through: 100, by: 10) {
-            let item = NSMenuItem(title: "\(pct)%", action: #selector(setOpacity(_:)), keyEquivalent: "")
-            item.tag = pct
-            if pct == 55 { item.state = .on }
-            m.addItem(item)
-        }
+
+        let sliderItem = NSMenuItem()
+        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        let slider = NSSlider(frame: NSRect(x: 16, y: 5, width: 168, height: 20))
+        slider.minValue = 10
+        slider.maxValue = 100
+        slider.doubleValue = 55
+        slider.isContinuous = true
+        slider.target = self
+        slider.action = #selector(sliderChanged(_:))
+        sliderView.addSubview(slider)
+        sliderItem.view = sliderView
+        m.addItem(sliderItem)
+
         m.addItem(.separator())
         m.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = m
@@ -143,9 +153,13 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     // MARK: - Local/Global Key Monitor (Esc + triple-press 's')
 
     func onKey(_ e: NSEvent, local: Bool) {
-        // Esc hides only if window is showing
+        // Esc: if URL bar is visible, hide it first. Otherwise hide the window.
         if e.keyCode == 53 {
-            if let w = window, w.isVisible { w.orderOut(nil) }
+            if urlBarVisible {
+                hideURLBar()
+            } else if let w = window, w.isVisible {
+                w.orderOut(nil)
+            }
             return
         }
 
@@ -196,6 +210,16 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         w.isMovableByWindowBackground = true
         w.collectionBehavior = [.canJoinAllSpaces]
 
+        // Style the system titlebar to match the rest of the window
+        if let titlebarView = w.standardWindowButton(.closeButton)?.superview {
+            let titlebarEffect = NSVisualEffectView(frame: titlebarView.bounds)
+            titlebarEffect.material = .hudWindow
+            titlebarEffect.blendingMode = .behindWindow
+            titlebarEffect.state = .active
+            titlebarEffect.autoresizingMask = [.width, .height]
+            titlebarView.addSubview(titlebarEffect, positioned: .below, relativeTo: titlebarView.subviews.first)
+        }
+
         let box = NSView(frame: NSRect(x: 0, y: 0, width: r.width, height: r.height))
         box.wantsLayer = true
         box.layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
@@ -206,12 +230,14 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let urlBarH: CGFloat = 44
         let tabBarH: CGFloat = 30
 
-        let toolbar = NSVisualEffectView(frame: NSRect(x: 0, y: r.height - urlBarH - titleBarH, width: r.width, height: urlBarH))
-        toolbar.material = .hudWindow
-        toolbar.blendingMode = .behindWindow
-        toolbar.state = .active
-        toolbar.wantsLayer = true
-        toolbar.autoresizingMask = [.width, .minYMargin]
+        let tb_toolbar = NSVisualEffectView(frame: NSRect(x: 0, y: r.height - urlBarH - titleBarH, width: r.width, height: urlBarH))
+        tb_toolbar.material = .hudWindow
+        tb_toolbar.blendingMode = .behindWindow
+        tb_toolbar.state = .active
+        tb_toolbar.wantsLayer = true
+        tb_toolbar.autoresizingMask = [.width, .minYMargin]
+        tb_toolbar.isHidden = true  // Start hidden
+        urlBarVisible = false
 
         let url = NSTextField(frame: NSRect(x: 10, y: 9, width: r.width - 20, height: 26))
         url.placeholderString = "Search or enter URL..."
@@ -221,11 +247,13 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         url.target = self
         url.action = #selector(go(_:))
         url.autoresizingMask = [.width]
-        toolbar.addSubview(url)
+        tb_toolbar.addSubview(url)
         urlBar = url
-        box.addSubview(toolbar)
+        toolbar = tb_toolbar
+        box.addSubview(tb_toolbar)
 
-        let tb = NSVisualEffectView(frame: NSRect(x: 0, y: r.height - urlBarH - titleBarH - tabBarH, width: r.width, height: tabBarH))
+        let tabBarH_actual: CGFloat = tabBarH
+        let tb = NSVisualEffectView(frame: NSRect(x: 0, y: r.height - titleBarH - tabBarH_actual, width: r.width, height: tabBarH_actual))
         tb.material = .hudWindow
         tb.blendingMode = .behindWindow
         tb.state = .active
@@ -234,7 +262,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         box.addSubview(tb)
         tabBar = tb
 
-        let webH = r.height - urlBarH - titleBarH - tabBarH
+        let webH = r.height - titleBarH - tabBarH
         let wc = NSView(frame: NSRect(x: 0, y: 0, width: r.width, height: webH))
         wc.autoresizingMask = [.width, .height]
         box.addSubview(wc)
@@ -319,11 +347,17 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     @objc func newTabAction() {
         addNewTab(url: "about:blank")
-        focusURLBar()
+        showURLBar()
+        urlBar?.stringValue = ""
+        urlBar?.selectText(nil)
     }
 
     @objc func closeTabAction() {
-        guard tabs.count > 1 else { return }
+        if tabs.count <= 1 {
+            // Last tab — hide the window
+            if let w = window, w.isVisible { w.orderOut(nil) }
+            return
+        }
         tabs[activeTabIndex].webView.removeFromSuperview()
         tabs.remove(at: activeTabIndex)
         if activeTabIndex >= tabs.count { activeTabIndex = tabs.count - 1 }
@@ -352,21 +386,46 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
     }
 
-    @objc func setOpacity(_ sender: NSMenuItem) {
-        opacity = CGFloat(sender.tag) / 100.0
+    @objc func sliderChanged(_ sender: NSSlider) {
+        opacity = CGFloat(sender.doubleValue) / 100.0
         window?.alphaValue = opacity
-        if let menu = statusItem.menu {
-            for item in menu.items {
-                if item.action == #selector(setOpacity(_:)) {
-                    item.state = (item.tag == sender.tag) ? .on : .off
-                }
-            }
-        }
     }
 
     @objc func focusURLBar() {
         window?.makeKeyAndOrderFront(nil)
+        showURLBar()
         urlBar?.selectText(nil)
+    }
+
+    func showURLBar() {
+        guard !urlBarVisible else { return }
+        urlBarVisible = true
+        toolbar?.isHidden = false
+        relayout()
+    }
+
+    func hideURLBar() {
+        guard urlBarVisible else { return }
+        urlBarVisible = false
+        toolbar?.isHidden = true
+        relayout()
+    }
+
+    func relayout() {
+        guard let w = window, let box = w.contentView else { return }
+        let r = box.bounds
+        let titleBarH: CGFloat = 28
+        let urlBarH: CGFloat = urlBarVisible ? 44 : 0
+        let tabBarH: CGFloat = 30
+
+        toolbar?.frame = NSRect(x: 0, y: r.height - urlBarH - titleBarH, width: r.width, height: 44)
+        tabBar?.frame = NSRect(x: 0, y: r.height - urlBarH - titleBarH - tabBarH, width: r.width, height: tabBarH)
+        webContainer?.frame = NSRect(x: 0, y: 0, width: r.width, height: r.height - urlBarH - titleBarH - tabBarH)
+
+        // Resize active webview to match
+        if let wv = activeWebView {
+            wv.frame = webContainer?.bounds ?? .zero
+        }
     }
 
     @objc func go(_ sender: NSTextField) {
@@ -375,6 +434,7 @@ class App: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             t = t.contains(".") && !t.contains(" ") ? "https://\(t)" : "https://claude.ai/search?q=\(t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? t)"
         }
         if let u = URL(string: t) { activeWebView?.load(URLRequest(url: u)) }
+        hideURLBar()
     }
 }
 
